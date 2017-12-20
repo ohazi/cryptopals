@@ -1,0 +1,7 @@
+[package]
+name = "set1"
+version = "0.1.0"
+authors = ["Oren Hazi <oren.hazi@gmail.com>"]
+
+[dependencies]
+hex = "0.3.1"
