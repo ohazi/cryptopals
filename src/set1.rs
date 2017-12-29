@@ -56,6 +56,17 @@ pub fn xor(a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
     return Ok(result);
 }
 
+pub fn xor_repeat(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
+    let result = plaintext.iter()
+        .zip(key.iter().cycle())
+        .map(|pair| match pair {
+            (&aa, &bb) => aa ^ bb,
+        })
+        .collect::<Vec<u8>>();
+
+    return result;
+}
+
 use std::collections::BTreeMap;
 
 pub fn char_freq_score(text: &[u8]) -> f64 {
@@ -96,8 +107,14 @@ pub fn char_freq_score(text: &[u8]) -> f64 {
     let mut num_letters = 0;
     for letter in text {
         match *letter {
+            // null
+            0 => {}
             // non-printable characters
-            0...31 => non_printable_count += 1,
+            1...9 => non_printable_count += 1,
+            // newline
+            10 => {}
+            // more non-printable characters
+            11...31 => non_printable_count += 1,
             // space
             32 => {}
             // printable symbols, including digits (ascii '!' - '@')
@@ -204,5 +221,64 @@ mod tests {
             str::from_utf8(value.as_slice()).unwrap(),
             "Cooking MC's like a pound of bacon"
         );
+    }
+
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::io::BufRead;
+
+    #[test]
+    fn detect_single_char_xor() {
+        let file = File::open("challenge-data/4.txt").unwrap();
+        let reader = BufReader::new(file);
+
+        let mut decoded = BTreeMap::new();
+
+        let mut line_num = 0;
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                let line_bytes = Vec::from_hex(line).unwrap();
+                for i in 0..=256 {
+                    let key: Vec<u8> = vec![i as u8; line_bytes.len()];
+                    if let Ok(decoded_bytes) = super::xor(&line_bytes, &key) {
+                        let score = super::char_freq_score(&decoded_bytes);
+                        decoded.insert((score * 1000.0) as u64, (line_num, i as u8, decoded_bytes));
+                    }
+                }
+            }
+            line_num += 1;
+        }
+
+        let mut found = false;
+        for (score, &(line, key, ref value)) in decoded.iter() {
+            let score: f64 = *score as f64 / 1000.0;
+            if score < 100.0 {
+                if line == 170 && key == 53 {
+                    let value = str::from_utf8(value).unwrap();
+                    assert_eq!(value, "Now that the party is jumping\n");
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "decrypted string not found!");
+    }
+
+    #[test]
+    fn repeating_key_xor() {
+        let plaintext = "Burning 'em, if you ain't quick and nimble\n\
+                         I go crazy when I hear a cymbal";
+        let key = "ICE";
+
+        let plaintext = plaintext.as_bytes();
+        let key = key.as_bytes();
+
+        let ciphertext = super::xor_repeat(&plaintext, &key);
+        
+        let ciphertext_ref = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226\
+                              324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20\
+                              283165286326302e27282f";
+        let ciphertext_ref = Vec::from_hex(ciphertext_ref).unwrap();
+
+        assert_eq!(ciphertext, ciphertext_ref);
     }
 }
