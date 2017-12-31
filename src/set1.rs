@@ -38,7 +38,47 @@ pub fn base64_encode(bytes: &[u8]) -> Result<String, &'static str> {
 }
 
 pub fn base64_decode(encoded: &str) -> Result<Vec<u8>, &'static str> {
-    Err("not implemented")
+    let mut result: Vec<u8> = Vec::with_capacity(encoded.len() * 3 / 4);
+    let encoded_stripped = encoded.as_bytes()
+        .iter()
+        .cloned()
+        .filter(|letter| match *letter {
+            b'\n' => false,
+            _ => true,
+        })
+        .collect::<Vec<u8>>();
+    for group in encoded_stripped.chunks(4) {
+        if group.len() != 4 {
+            return Err("chunk too small!");
+        }
+        let mut padding: i8 = 0;
+        let sextets = group.iter()
+            .map(|letter| match *letter {
+                c @ b'A'...b'Z' => Ok(c as u8 - 0x41),
+                c @ b'a'...b'z' => Ok(c as u8 - 0x61 + 26),
+                c @ b'0'...b'9' => Ok(c as u8 - 0x30 + 52),
+                b'+' => Ok(62),
+                b'/' => Ok(63),
+                b'=' => {
+                    padding += 1;
+                    Ok(0)
+                }
+                _ => Err("illegal character!"),
+            })
+            .collect::<Result<Vec<u8>, &'static str>>()?;
+        for i in 0..=2 {
+            let octet = match i {
+                0 => ((sextets[0] & 0x3F) << 2) | ((sextets[1] & 0x30) >> 4),
+                1 => ((sextets[1] & 0x0F) << 4) | ((sextets[2] & 0x3C) >> 2),
+                2 => ((sextets[2] & 0x03) << 6) | ((sextets[3] & 0x3F) >> 0),
+                _ => return Err("too many octets!"),
+            };
+            if (i as i8) < (3 - padding) {
+                result.push(octet);
+            }
+        }
+    }
+    return Ok(result);
 }
 
 pub fn xor(a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -152,6 +192,40 @@ pub fn char_freq_score(text: &[u8]) -> f64 {
     return chisquared + (non_printable_count as f64 * 500.0);
 }
 
+extern crate bit_vec;
+use self::bit_vec::BitVec;
+
+pub fn hamming_distance(a: &[u8], b: &[u8]) -> Result<u32, &'static str> {
+    if a.len() != b.len() {
+        return Err("sequences must have same length");
+    }
+    let result = a.iter()
+        .zip(b.iter())
+        .map(|(aa, bb)| -> u32 {
+            BitVec::from_bytes(&[aa ^ bb]).iter()
+                .map(|val| val as u32)
+                .sum()})
+        .sum();
+    return Ok(result);
+}
+
+pub fn find_best_single_byte_xor(ciphertext: &[u8]) -> u8 {
+    let mut decoded: Vec<(f64, u8, Vec<u8>)> = Vec::with_capacity(256);
+
+    for i in 0..=256 {
+        let key: Vec<u8> = vec![i as u8; ciphertext.len()];
+        if let Ok(decoded_bytes) = xor(ciphertext, &key) {
+            let score = char_freq_score(&decoded_bytes);
+            decoded.push((score, i as u8, decoded_bytes));
+        }
+    }
+
+    decoded.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    let (_, key, _) = decoded[0];
+    return key;
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -205,17 +279,23 @@ mod tests {
         let encoded = "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736";
         let encoded_bytes = Vec::from_hex(encoded).unwrap();
 
-        let mut decoded: BTreeMap<u64, (u8, Vec<u8>)> = BTreeMap::new();
+        //don't want to use a map here, because we'll lose any values with the same score
+        //let mut decoded: BTreeMap<u64, (u8, Vec<u8>)> = BTreeMap::new();
+        let mut decoded: Vec<(f64, u8, Vec<u8>)> = Vec::with_capacity(256);
 
         for i in 0..=256 {
             let key: Vec<u8> = vec![i as u8; encoded_bytes.len()];
             if let Ok(decoded_bytes) = super::xor(&encoded_bytes, &key) {
                 let score = super::char_freq_score(&decoded_bytes);
-                decoded.insert((score * 1000.0) as u64, (i as u8, decoded_bytes));
+                //decoded.insert((score * 1000.0) as u64, (i as u8, decoded_bytes));
+                decoded.push((score, i as u8, decoded_bytes));
             }
         }
 
-        let &(key, ref value) = decoded.values().next().unwrap();
+        decoded.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        //let &(key, ref value) = decoded.values().next().unwrap();
+        let (_, key, ref value) = decoded[0];
         assert_eq!(key, 88);
         assert_eq!(
             str::from_utf8(value.as_slice()).unwrap(),
@@ -280,5 +360,56 @@ mod tests {
         let ciphertext_ref = Vec::from_hex(ciphertext_ref).unwrap();
 
         assert_eq!(ciphertext, ciphertext_ref);
+    }
+
+    #[test]
+    fn hamming_distance() {
+        assert_eq!(
+            super::hamming_distance(
+                "this is a test".as_bytes(),
+                "wokka wokka!!!".as_bytes()).unwrap(),
+            37);
+    }
+
+    extern crate openssl;
+    use self::openssl::symm;
+    use self::openssl::symm::Cipher;
+
+    use std::io::prelude::*;
+
+    #[test]
+    fn aes_ecb_mode() {
+        let mut f = File::open("challenge-data/7.txt").unwrap();
+        let mut encoded = String::new();
+        f.read_to_string(&mut encoded).unwrap();
+
+        let decoded = super::base64_decode(&encoded).unwrap();
+
+        let plaintext = symm::decrypt(
+            Cipher::aes_128_ecb(),
+            "YELLOW SUBMARINE".as_bytes(),
+            None,
+            &decoded).unwrap();
+        let plaintext = str::from_utf8(&plaintext).unwrap();
+
+        let mut f = File::open("challenge-data/7_plaintext.txt").unwrap();
+        let mut plaintext_ref = String::new();
+        f.read_to_string(&mut plaintext_ref).unwrap();
+
+        assert_eq!(plaintext, plaintext_ref);
+    }
+
+    #[test]
+    fn detect_aes_ecb_mode() {
+        let f = File::open("challenge-data/8.txt").unwrap();
+        let reader = BufReader::new(f);
+
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                let line_bytes = Vec::from_hex(line).unwrap();
+            }
+        }
+
+        panic!("not finished");
     }
 }

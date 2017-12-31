@@ -6,4 +6,5 @@ authors = ["Oren Hazi <oren.hazi@gmail.com>"]
 [dependencies]
 hex = "0.3.1"
 maplit = "1.0.0"
+bit-vec = "0.4.4"
 openssl = "0.9.23"
