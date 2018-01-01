@@ -1,9 +1,8 @@
-
 pub fn base64_encode(bytes: &[u8]) -> Result<String, &'static str> {
     let mut result = String::new();
     for group in bytes.chunks(3) {
         let extended = match group.len() {
-            1 => [group[0], 0,        0],
+            1 => [group[0], 0, 0],
             2 => [group[0], group[1], 0],
             3 => [group[0], group[1], group[2]],
             _ => return Err("chunk too large!"),
@@ -11,7 +10,7 @@ pub fn base64_encode(bytes: &[u8]) -> Result<String, &'static str> {
 
         for i in 0..=3 {
             let sextet = match i {
-                0 =>                               ((extended[0] & 0xFC) >> 2),
+                0 => ((extended[0] & 0xFC) >> 2),
                 1 => ((extended[0] & 0x03) << 4) | ((extended[1] & 0xF0) >> 4),
                 2 => ((extended[1] & 0x0F) << 2) | ((extended[2] & 0xC0) >> 6),
                 3 => ((extended[2] & 0x3F) << 0),
@@ -39,7 +38,8 @@ pub fn base64_encode(bytes: &[u8]) -> Result<String, &'static str> {
 
 pub fn base64_decode(encoded: &str) -> Result<Vec<u8>, &'static str> {
     let mut result: Vec<u8> = Vec::with_capacity(encoded.len() * 3 / 4);
-    let encoded_stripped = encoded.as_bytes()
+    let encoded_stripped = encoded
+        .as_bytes()
         .iter()
         .cloned()
         .filter(|letter| match *letter {
@@ -52,7 +52,8 @@ pub fn base64_decode(encoded: &str) -> Result<Vec<u8>, &'static str> {
             return Err("chunk too small!");
         }
         let mut padding: i8 = 0;
-        let sextets = group.iter()
+        let sextets = group
+            .iter()
             .map(|letter| match *letter {
                 c @ b'A'...b'Z' => Ok(c as u8 - 0x41),
                 c @ b'a'...b'z' => Ok(c as u8 - 0x61 + 26),
@@ -97,7 +98,8 @@ pub fn xor(a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
 }
 
 pub fn xor_repeat(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
-    let result = plaintext.iter()
+    let result = plaintext
+        .iter()
         .zip(key.iter().cycle())
         .map(|pair| match pair {
             (&aa, &bb) => aa ^ bb,
@@ -202,9 +204,11 @@ pub fn hamming_distance(a: &[u8], b: &[u8]) -> Result<u32, &'static str> {
     let result = a.iter()
         .zip(b.iter())
         .map(|(aa, bb)| -> u32 {
-            BitVec::from_bytes(&[aa ^ bb]).iter()
+            BitVec::from_bytes(&[aa ^ bb])
+                .iter()
                 .map(|val| val as u32)
-                .sum()})
+                .sum()
+        })
         .sum();
     return Ok(result);
 }
@@ -250,6 +254,29 @@ mod tests {
         let test = "foobar".as_bytes();
         if let Ok(b64) = super::base64_encode(&test) {
             assert_eq!(b64, "Zm9vYmFy");
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn base64_decode() {
+        let example_b64 = "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
+        if let Ok(example) = super::base64_decode(example_b64) {
+            assert_eq!(
+                example,
+                Vec::from_hex(
+                    "49276d206b696c6c696e6720796f757220627261696e206c\
+                     696b65206120706f69736f6e6f7573206d757368726f6f6d"
+                ).unwrap()
+            );
+        } else {
+            panic!();
+        }
+
+        let b64 = "Zm9vYmFy";
+        if let Ok(test) = super::base64_decode(&b64) {
+            assert_eq!(test, "foobar".as_bytes());
         } else {
             panic!();
         }
@@ -353,7 +380,7 @@ mod tests {
         let key = key.as_bytes();
 
         let ciphertext = super::xor_repeat(&plaintext, &key);
-        
+
         let ciphertext_ref = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226\
                               324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20\
                               283165286326302e27282f";
@@ -365,10 +392,73 @@ mod tests {
     #[test]
     fn hamming_distance() {
         assert_eq!(
-            super::hamming_distance(
-                "this is a test".as_bytes(),
-                "wokka wokka!!!".as_bytes()).unwrap(),
-            37);
+            super::hamming_distance("this is a test".as_bytes(), "wokka wokka!!!".as_bytes())
+                .unwrap(),
+            37
+        );
+    }
+
+    #[test]
+    fn break_repeating_key_xor() {
+        let mut f = File::open("challenge-data/6.txt").unwrap();
+        let mut encoded = String::new();
+        f.read_to_string(&mut encoded).unwrap();
+        let decoded = super::base64_decode(&encoded).unwrap();
+
+        let mut results: Vec<(f32, usize)> = Vec::with_capacity(40);
+
+        for keysize in 2..=40 {
+            let sequences = decoded.chunks(keysize).collect::<Vec<&[u8]>>();
+            let norm_distances = sequences
+                .chunks(2)
+                .filter(|maybe_pair| maybe_pair.len() == 2)
+                .filter(|maybe_same_len| maybe_same_len[0].len() == maybe_same_len[1].len())
+                .map(|pair| {
+                    super::hamming_distance(pair[0], pair[1]).unwrap() as f32 / keysize as f32
+                })
+                .collect::<Vec<f32>>();
+
+            let norm_dist_avg: f32 = &norm_distances.iter().sum() / norm_distances.len() as f32;
+
+            results.push((norm_dist_avg, keysize));
+        }
+
+        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        let keysize = results[0].1;
+        assert_eq!(keysize, 29);
+
+        let sequences = decoded.chunks(keysize).collect::<Vec<&[u8]>>();
+        let mut transposed: Vec<Vec<u8>> = Vec::with_capacity(keysize);
+        for i in 0..keysize {
+            let mut line = Vec::with_capacity(sequences.len());
+            for j in 0..sequences.len() {
+                if i < sequences[j].len() {
+                    line.push(sequences[j][i]);
+                }
+            }
+            transposed.push(line);
+        }
+
+        let mut key: Vec<u8> = Vec::with_capacity(keysize);
+
+        for block in transposed {
+            let key_byte = super::find_best_single_byte_xor(&block);
+            key.push(key_byte);
+        }
+
+        assert_eq!(
+            str::from_utf8(&key).unwrap(),
+            "Terminator X: Bring the noise"
+        );
+
+        let plaintext = super::xor_repeat(&decoded, &key);
+        let plaintext = str::from_utf8(&plaintext).unwrap();
+
+        let mut f = File::open("challenge-data/6_plaintext.txt").unwrap();
+        let mut plaintext_ref = String::new();
+        f.read_to_string(&mut plaintext_ref).unwrap();
+        assert_eq!(plaintext, plaintext_ref);
     }
 
     extern crate openssl;
@@ -389,7 +479,8 @@ mod tests {
             Cipher::aes_128_ecb(),
             "YELLOW SUBMARINE".as_bytes(),
             None,
-            &decoded).unwrap();
+            &decoded,
+        ).unwrap();
         let plaintext = str::from_utf8(&plaintext).unwrap();
 
         let mut f = File::open("challenge-data/7_plaintext.txt").unwrap();
@@ -404,12 +495,30 @@ mod tests {
         let f = File::open("challenge-data/8.txt").unwrap();
         let reader = BufReader::new(f);
 
+        let mut results: Vec<(u32, usize, Vec<u8>)> = Vec::new();
+        let mut linenum = 0;
         for line in reader.lines() {
             if let Ok(line) = line {
                 let line_bytes = Vec::from_hex(line).unwrap();
+                let sequences = line_bytes.chunks(16).collect::<Vec<&[u8]>>();
+
+                let mut scores: Vec<u32> = Vec::new();
+                for i in 0..sequences.len() {
+                    for j in (i + 1)..sequences.len() {
+                        let score = super::hamming_distance(sequences[i], sequences[j]).unwrap();
+                        scores.push(score);
+                    }
+                }
+
+                scores.sort();
+
+                results.push((scores[0], linenum, line_bytes.clone()));
+                linenum += 1;
             }
         }
 
-        panic!("not finished");
+        results.sort_by_key(|elem| elem.0);
+
+        assert_eq!(results[0].1, 132);
     }
 }
