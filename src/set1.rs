@@ -97,6 +97,21 @@ pub fn xor(a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
     return Ok(result);
 }
 
+pub fn xor_in_place(data: &mut [u8], other: &[u8]) -> Result<usize, &'static str> {
+    if data.len() != other.len() {
+        return Err("buffer size mismatch");
+    }
+
+    let xor_count = data.iter_mut()
+        .zip(other)
+        .map(|(data_elem, other_elem)| {
+            *data_elem ^= other_elem;
+        })
+        .count();
+
+    return Ok(xor_count);
+}
+
 pub fn xor_repeat(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
     let result = plaintext
         .iter()
@@ -233,6 +248,8 @@ pub fn find_best_single_byte_xor(ciphertext: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
 
+    use set1;
+
     extern crate hex;
     use self::hex::FromHex;
 
@@ -242,7 +259,7 @@ mod tests {
                            696b65206120706f69736f6e6f7573206d757368726f6f6d";
         let example_bytes = Vec::from_hex(example_hex).unwrap();
 
-        if let Ok(b64) = super::base64_encode(&example_bytes) {
+        if let Ok(b64) = set1::base64_encode(&example_bytes) {
             assert_eq!(
                 b64,
                 "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t"
@@ -252,7 +269,7 @@ mod tests {
         }
 
         let test = "foobar".as_bytes();
-        if let Ok(b64) = super::base64_encode(&test) {
+        if let Ok(b64) = set1::base64_encode(&test) {
             assert_eq!(b64, "Zm9vYmFy");
         } else {
             panic!();
@@ -262,7 +279,7 @@ mod tests {
     #[test]
     fn base64_decode() {
         let example_b64 = "SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t";
-        if let Ok(example) = super::base64_decode(example_b64) {
+        if let Ok(example) = set1::base64_decode(example_b64) {
             assert_eq!(
                 example,
                 Vec::from_hex(
@@ -275,7 +292,7 @@ mod tests {
         }
 
         let b64 = "Zm9vYmFy";
-        if let Ok(test) = super::base64_decode(&b64) {
+        if let Ok(test) = set1::base64_decode(&b64) {
             assert_eq!(test, "foobar".as_bytes());
         } else {
             panic!();
@@ -292,7 +309,7 @@ mod tests {
         let b_bytes = Vec::from_hex(b).unwrap();
         let res_bytes = Vec::from_hex(res).unwrap();
 
-        match super::xor(&a_bytes, &b_bytes) {
+        match set1::xor(&a_bytes, &b_bytes) {
             Ok(r) => assert_eq!(r, res_bytes),
             Err(str) => panic!(str),
         };
@@ -312,8 +329,8 @@ mod tests {
 
         for i in 0..=256 {
             let key: Vec<u8> = vec![i as u8; encoded_bytes.len()];
-            if let Ok(decoded_bytes) = super::xor(&encoded_bytes, &key) {
-                let score = super::char_freq_score(&decoded_bytes);
+            if let Ok(decoded_bytes) = set1::xor(&encoded_bytes, &key) {
+                let score = set1::char_freq_score(&decoded_bytes);
                 //decoded.insert((score * 1000.0) as u64, (i as u8, decoded_bytes));
                 decoded.push((score, i as u8, decoded_bytes));
             }
@@ -347,8 +364,8 @@ mod tests {
                 let line_bytes = Vec::from_hex(line).unwrap();
                 for i in 0..=256 {
                     let key: Vec<u8> = vec![i as u8; line_bytes.len()];
-                    if let Ok(decoded_bytes) = super::xor(&line_bytes, &key) {
-                        let score = super::char_freq_score(&decoded_bytes);
+                    if let Ok(decoded_bytes) = set1::xor(&line_bytes, &key) {
+                        let score = set1::char_freq_score(&decoded_bytes);
                         decoded.insert((score * 1000.0) as u64, (line_num, i as u8, decoded_bytes));
                     }
                 }
@@ -379,7 +396,7 @@ mod tests {
         let plaintext = plaintext.as_bytes();
         let key = key.as_bytes();
 
-        let ciphertext = super::xor_repeat(&plaintext, &key);
+        let ciphertext = set1::xor_repeat(&plaintext, &key);
 
         let ciphertext_ref = "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226\
                               324272765272a282b2f20430a652e2c652a3124333a653e2b2027630c692b20\
@@ -392,7 +409,7 @@ mod tests {
     #[test]
     fn hamming_distance() {
         assert_eq!(
-            super::hamming_distance("this is a test".as_bytes(), "wokka wokka!!!".as_bytes())
+            set1::hamming_distance("this is a test".as_bytes(), "wokka wokka!!!".as_bytes())
                 .unwrap(),
             37
         );
@@ -403,7 +420,7 @@ mod tests {
         let mut f = File::open("challenge-data/6.txt").unwrap();
         let mut encoded = String::new();
         f.read_to_string(&mut encoded).unwrap();
-        let decoded = super::base64_decode(&encoded).unwrap();
+        let decoded = set1::base64_decode(&encoded).unwrap();
 
         let mut results: Vec<(f32, usize)> = Vec::with_capacity(40);
 
@@ -414,7 +431,7 @@ mod tests {
                 .filter(|maybe_pair| maybe_pair.len() == 2)
                 .filter(|maybe_same_len| maybe_same_len[0].len() == maybe_same_len[1].len())
                 .map(|pair| {
-                    super::hamming_distance(pair[0], pair[1]).unwrap() as f32 / keysize as f32
+                    set1::hamming_distance(pair[0], pair[1]).unwrap() as f32 / keysize as f32
                 })
                 .collect::<Vec<f32>>();
 
@@ -443,7 +460,7 @@ mod tests {
         let mut key: Vec<u8> = Vec::with_capacity(keysize);
 
         for block in transposed {
-            let key_byte = super::find_best_single_byte_xor(&block);
+            let key_byte = set1::find_best_single_byte_xor(&block);
             key.push(key_byte);
         }
 
@@ -452,7 +469,7 @@ mod tests {
             "Terminator X: Bring the noise"
         );
 
-        let plaintext = super::xor_repeat(&decoded, &key);
+        let plaintext = set1::xor_repeat(&decoded, &key);
         let plaintext = str::from_utf8(&plaintext).unwrap();
 
         let mut f = File::open("challenge-data/6_plaintext.txt").unwrap();
@@ -473,7 +490,7 @@ mod tests {
         let mut encoded = String::new();
         f.read_to_string(&mut encoded).unwrap();
 
-        let decoded = super::base64_decode(&encoded).unwrap();
+        let decoded = set1::base64_decode(&encoded).unwrap();
 
         let plaintext = symm::decrypt(
             Cipher::aes_128_ecb(),
@@ -505,7 +522,7 @@ mod tests {
                 let mut scores: Vec<u32> = Vec::new();
                 for i in 0..sequences.len() {
                     for j in (i + 1)..sequences.len() {
-                        let score = super::hamming_distance(sequences[i], sequences[j]).unwrap();
+                        let score = set1::hamming_distance(sequences[i], sequences[j]).unwrap();
                         scores.push(score);
                     }
                 }
