@@ -20,4 +20,6 @@ mod set2;
 //extern crate openssl;
 //use openssl::symm::{decrypt, Cipher};
 
-fn main() {}
+fn main() {
+    set2::encryption_oracle(&[0]);
+}

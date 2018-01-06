@@ -139,6 +139,69 @@ pub fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u
     return Ok(decrypted);
 }
 
+extern crate rand;
+use self::rand::Rng;
+
+use self::openssl::symm;
+
+#[derive(Debug, PartialEq)]
+pub enum CipherMode {
+    CBC,
+    ECB,
+    Unknown,
+}
+
+pub fn encryption_oracle(input: &[u8]) -> (Vec<u8>, CipherMode) {
+    let mut rng = rand::thread_rng();
+
+    let mut key = [0u8; 16];
+    rng.fill_bytes(&mut key);
+
+    let mut plaintext: Vec<u8> = Vec::with_capacity(input.len() + 20);
+
+    let prefix_len = rng.gen_range(5, 11);
+    let prefix = rng.gen_iter::<u8>().take(prefix_len).collect::<Vec<u8>>();
+    plaintext.extend_from_slice(&prefix);
+
+    plaintext.extend_from_slice(input);
+
+    let suffix_len = rng.gen_range(5, 11);
+    let suffix = rng.gen_iter::<u8>().take(suffix_len).collect::<Vec<u8>>();
+    plaintext.extend_from_slice(&suffix);
+
+    if rng.gen() {
+        // cbc mode
+        let mut iv = [0u8; 16];
+        rng.fill_bytes(&mut iv);
+
+        return (
+            aes_cbc_encrypt(&key, &iv, &plaintext).unwrap(),
+            CipherMode::CBC,
+        );
+    } else {
+        // ecb mode
+        return (
+            symm::encrypt(Cipher::aes_128_ecb(), &key, None, &plaintext).unwrap(),
+            CipherMode::ECB,
+        );
+    }
+}
+
+pub fn detect_ecb_cbc<F>(mut oracle: F) -> CipherMode
+where
+    F: FnMut(&[u8]) -> Vec<u8>,
+{
+    let test_input = [0; 256];
+    let result = oracle(&test_input);
+
+    let test_blocks = result.chunks(16).skip(1).take(2).collect::<Vec<&[u8]>>();
+    if test_blocks[0] == test_blocks[1] {
+        return CipherMode::ECB;
+    } else {
+        return CipherMode::CBC;
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -202,5 +265,22 @@ mod tests {
         f.read_to_string(&mut plaintext_ref).unwrap();
 
         assert_eq!(plaintext, plaintext_ref);
+    }
+
+    #[test]
+    fn detect_ecb_cbc() {
+        for _ in 0..100 {
+            let mut actual_result = set2::CipherMode::Unknown;
+            let detect_result = set2::detect_ecb_cbc(|input| {
+                let (ciphertext, result) = set2::encryption_oracle(input);
+                actual_result = result;
+                return ciphertext;
+            });
+            println!(
+                "actual_result: {:?}, detect_result: {:?}",
+                actual_result, detect_result
+            );
+            assert_eq!(actual_result, detect_result);
+        }
     }
 }
