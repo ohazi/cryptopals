@@ -245,6 +245,13 @@ pub fn find_best_single_byte_xor(ciphertext: &[u8]) -> u8 {
     return key;
 }
 
+pub fn to_hex(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<String>>()
+        .join("")
+}
+
 #[cfg(test)]
 mod tests {
 

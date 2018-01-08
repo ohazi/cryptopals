@@ -20,15 +20,26 @@ pub fn pkcs7_unpad(data: &[u8], blocksize: u8) -> Result<&[u8], &'static str> {
         return Err("block size cannot be zero");
     }
     if data.is_empty() {
-        return Err("data length cannot be zero");
+        return Err("message length cannot be zero");
     }
     if data.len() % blocksize as usize != 0 {
-        return Err("data length must be an integer multiple of block size");
+        return Err("message length must be an integer multiple of block size");
     }
 
     let pad_byte: u8 = *data.last().unwrap();
     if pad_byte > blocksize {
         return Err("found pad byte larger than block size");
+    }
+    return Ok(data.get(..(data.len() - pad_byte as usize)).unwrap());
+}
+
+pub fn pkcs7_unpad_unchecked(data: &[u8], blocksize: u8) -> Result<&[u8], &'static str> {
+    let pad_byte: u8 = *data.last().unwrap();
+    if pad_byte > blocksize {
+        return Err("found pad byte larger than block size");
+    }
+    if pad_byte as usize > data.len() {
+        return Err("found pad byte larger than message size");
     }
     return Ok(data.get(..(data.len() - pad_byte as usize)).unwrap());
 }
@@ -202,6 +213,117 @@ where
     }
 }
 
+pub trait Oracle {
+    fn oracle(&self, input: &[u8]) -> Vec<u8>;
+}
+
+pub struct EcbOracleSimple {
+    key: [u8; 16],
+}
+
+impl EcbOracleSimple {
+    pub fn new() -> EcbOracleSimple {
+        let mut rng = rand::thread_rng();
+
+        let mut key = [0; 16];
+        rng.fill_bytes(&mut key);
+        println!("key: {}", set1::to_hex(&key));
+
+        EcbOracleSimple { key: key }
+    }
+}
+
+impl Oracle for EcbOracleSimple {
+    fn oracle(&self, input: &[u8]) -> Vec<u8> {
+        let unknown_string = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkg\
+                              aGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBq\
+                              dXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUg\
+                              YnkK";
+        let unknown_string = set1::base64_decode(unknown_string).unwrap();
+
+        let mut plaintext = Vec::with_capacity(input.len() + unknown_string.len());
+        plaintext.extend_from_slice(input);
+        plaintext.extend_from_slice(&unknown_string);
+
+        return symm::encrypt(Cipher::aes_128_ecb(), &self.key, None, &plaintext).unwrap();
+    }
+}
+
+pub fn byte_at_a_time_ecb_decryption_simple(oracle: &Oracle) -> Result<String, &'static str> {
+    // First find block size
+    let mut blocksize = 0;
+    let mut prev_result = [0; 128];
+    for i in 2..128 {
+        let mut input = vec![0; 128];
+        input[i] = 1;
+        let result = oracle.oracle(&input);
+
+        if result[..i - 1] == prev_result[..i - 1] {
+            blocksize = i - 1;
+            break;
+        } else {
+            prev_result.copy_from_slice(&result[..128]);
+        }
+    }
+
+    if blocksize == 0 {
+        return Err("could not determine block size");
+    }
+
+    match detect_ecb_cbc(|input| oracle.oracle(input)) {
+        CipherMode::ECB => {}
+        _ => return Err("Oracle doesn't appear to use ECB"),
+    }
+
+    let mut decoded: Vec<u8> = Vec::new();
+
+    let padding = vec!['A' as u8; blocksize];
+    'decode: for i in 0..500 {
+        let block_num = i / blocksize;
+        let block_pos = i % blocksize;
+
+        let offset = &padding[block_pos..blocksize - 1];
+        assert_eq!(offset.len(), blocksize - 1 - block_pos);
+        let oracle_offset = oracle.oracle(offset);
+
+        let mut test = Vec::with_capacity(blocksize);
+        if block_num == 0 {
+            test.extend_from_slice(offset);
+            test.extend_from_slice(&decoded);
+        } else {
+            test.extend_from_slice(&decoded[decoded.len() - (blocksize - 1)..]);
+        }
+        assert_eq!(test.len(), blocksize - 1);
+
+        for j in 0..=255 {
+            test.push(j);
+            let oracle_test = oracle.oracle(&test);
+            test.pop();
+
+            if let Some(block) = oracle_offset
+                .chunks(blocksize)
+                .skip(block_num)
+                .take(1)
+                .next()
+            {
+                if block == oracle_test.chunks(blocksize).take(1).next().unwrap() {
+                    decoded.push(j);
+                    break;
+                }
+            } else {
+                break 'decode;
+            }
+        }
+    }
+
+    let decoded_len = pkcs7_unpad_unchecked(&decoded, blocksize as u8)
+        .unwrap()
+        .len();
+    decoded.truncate(decoded_len);
+
+    return Ok(String::from_utf8(decoded).unwrap());
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -282,5 +404,25 @@ mod tests {
             );
             assert_eq!(actual_result, detect_result);
         }
+    }
+
+    use set2::Oracle;
+
+    #[test]
+    fn byte_at_a_time_ecb_decryption_simple() {
+        // Use a trait object here. Pretend we got the oracle from elsewhere
+        // and don't know the underlying type, so we have to do all the work to
+        // figure out the size, detect ECB mode, etc.
+        let oracle = &set2::EcbOracleSimple::new() as &Oracle;
+        let result = set2::byte_at_a_time_ecb_decryption_simple(oracle).unwrap();
+
+        println!("result:\n{}", result);
+
+        let result_ref = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkg\
+                          aGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBq\
+                          dXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUg\
+                          YnkK";
+        let result_ref = String::from_utf8(set1::base64_decode(result_ref).unwrap()).unwrap();
+        assert_eq!(result, result_ref);
     }
 }
