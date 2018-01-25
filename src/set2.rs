@@ -213,27 +213,26 @@ where
     }
 }
 
-pub trait Oracle {
+pub trait EcbOracleSimple {
     fn oracle(&self, input: &[u8]) -> Vec<u8>;
 }
 
-pub struct EcbOracleSimple {
+pub struct RandomKey {
     key: [u8; 16],
 }
 
-impl EcbOracleSimple {
-    pub fn new() -> EcbOracleSimple {
+impl RandomKey {
+    pub fn new() -> RandomKey {
         let mut rng = rand::thread_rng();
 
         let mut key = [0; 16];
         rng.fill_bytes(&mut key);
-        println!("key: {}", set1::to_hex(&key));
 
-        EcbOracleSimple { key: key }
+        RandomKey { key: key }
     }
 }
 
-impl Oracle for EcbOracleSimple {
+impl EcbOracleSimple for RandomKey {
     fn oracle(&self, input: &[u8]) -> Vec<u8> {
         let unknown_string = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkg\
                               aGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBq\
@@ -249,7 +248,7 @@ impl Oracle for EcbOracleSimple {
     }
 }
 
-pub fn byte_at_a_time_ecb_decryption_simple(oracle: &Oracle) -> Result<String, &'static str> {
+pub fn byte_at_a_time_ecb_decryption_simple(oracle: &EcbOracleSimple) -> Result<String, &'static str> {
     // First find block size
     let mut blocksize = 0;
     let mut prev_result = [0; 128];
@@ -322,6 +321,80 @@ pub fn byte_at_a_time_ecb_decryption_simple(oracle: &Oracle) -> Result<String, &
     decoded.truncate(decoded_len);
 
     return Ok(String::from_utf8(decoded).unwrap());
+}
+
+use std::collections::HashMap;
+
+fn parse_key_value(input: &str) -> Result<HashMap<&str, &str>, &'static str> {
+    input.split_terminator('&')
+        .map(|keyval| {
+            let keyval = keyval.splitn(2, '=').collect::<Vec<&str>>();
+            if keyval.len() < 2 {
+                return Err("malformed input");
+            } else {
+                return Ok((keyval[0], keyval[1]));
+            }
+        }).collect::<Result<HashMap<&str, &str>, &'static str>>()
+}
+
+fn profile_for(email: &str) -> String {
+    let email_clean  = email.split(|c| c == '&' || c == '=').collect::<String>();
+    format!("email={}&uid=10&role=user", email_clean)
+}
+
+fn encrypt_profile(key: &[u8], profile: &str) -> Result<Vec<u8>, &'static str> {
+    if key.len() != 16 {
+        return Err("invalid key size");
+    }
+    symm::encrypt(Cipher::aes_128_ecb(), key, None, profile.as_bytes())
+        .map_err(|_| "symm::encrypt failed")
+}
+
+fn decrypt_profile(key: &[u8], encrypted: &[u8]) -> Result<String, &'static str> {
+    if key.len() != 16 {
+        return Err("invalid key size");
+    }
+    match symm::decrypt(Cipher::aes_128_ecb(), key, None, encrypted) {
+        Err(_) => Err("symm::decrypt failed"),
+        Ok(decrypted) => match String::from_utf8(decrypted) {
+            Err(_) => Err("utf8 conversion failed"),
+            Ok(s) => Ok(s),
+        }
+    }
+}
+
+pub trait EcbCutPaste {
+    fn encrypted_profile_for(&self, email: &str) -> Vec<u8>;
+    fn decrypt_profile(&self, encrypted: &[u8]) -> String;
+}
+
+impl EcbCutPaste for RandomKey {
+    fn encrypted_profile_for(&self, email: &str) -> Vec<u8> {
+        encrypt_profile(&self.key, &profile_for(email)).unwrap()
+    }
+
+    fn decrypt_profile(&self, encrypted: &[u8]) -> String {
+        decrypt_profile(&self.key, encrypted).unwrap()
+    }
+}
+
+fn ecb_cut_and_paste(oracle: &EcbCutPaste) -> Vec<u8> {
+    let blocks12 = oracle.encrypted_profile_for("foooo@bar.com");
+    let block3 = oracle.encrypted_profile_for(
+        "foooo@bar.admin\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b");
+
+    let blocks = blocks12
+        .chunks(16)
+        .take(2)
+        .chain(block3.chunks(16).nth(1))
+        .collect::<Vec<&[u8]>>();
+
+    let mut result = Vec::new();
+    for block in blocks {
+        result.extend_from_slice(block);
+    }
+
+    return result;
 }
 
 #[cfg(test)]
@@ -398,25 +471,19 @@ mod tests {
                 actual_result = result;
                 return ciphertext;
             });
-            println!(
-                "actual_result: {:?}, detect_result: {:?}",
-                actual_result, detect_result
-            );
             assert_eq!(actual_result, detect_result);
         }
     }
 
-    use set2::Oracle;
+    use set2::EcbOracleSimple;
 
     #[test]
     fn byte_at_a_time_ecb_decryption_simple() {
         // Use a trait object here. Pretend we got the oracle from elsewhere
         // and don't know the underlying type, so we have to do all the work to
         // figure out the size, detect ECB mode, etc.
-        let oracle = &set2::EcbOracleSimple::new() as &Oracle;
+        let oracle = &set2::RandomKey::new() as &EcbOracleSimple;
         let result = set2::byte_at_a_time_ecb_decryption_simple(oracle).unwrap();
-
-        println!("result:\n{}", result);
 
         let result_ref = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkg\
                           aGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBq\
@@ -424,5 +491,68 @@ mod tests {
                           YnkK";
         let result_ref = String::from_utf8(set1::base64_decode(result_ref).unwrap()).unwrap();
         assert_eq!(result, result_ref);
+    }
+
+    //use std::collections::HashMap;
+
+    #[test]
+    fn parse_key_value() {
+        let test = "foo=bar&baz=qux&zap=zazzle";
+        let parsed = set2::parse_key_value(test);
+        assert_eq!(parsed.unwrap(),
+            hashmap!(
+                "foo" => "bar",
+                "baz" => "qux",
+                "zap" => "zazzle"));
+
+        let test = "foo&baz=qux&zap=zazzle";
+        let parsed = set2::parse_key_value(test);
+        assert!(parsed.is_err());
+
+        let test = "foo=&baz=qux&zap=zazzle";
+        let parsed = set2::parse_key_value(test);
+        assert_eq!(parsed.unwrap(),
+            hashmap!(
+                "foo" => "",
+                "baz" => "qux",
+                "zap" => "zazzle"));
+
+        let test = "foo=bar&&baz=qux&zap=zazzle";
+        let parsed = set2::parse_key_value(test);
+        assert!(parsed.is_err());
+
+        let test = "foo=bar&baz=qux&zap=zazzle&";
+        let parsed = set2::parse_key_value(test);
+        assert_eq!(parsed.unwrap(),
+            hashmap!(
+                "foo" => "bar",
+                "baz" => "qux",
+                "zap" => "zazzle"));
+
+        let test = "foo=bar&baz=qux&zap=zazzle&&";
+        let parsed = set2::parse_key_value(test);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn profile_for() {
+        assert_eq!(set2::profile_for("foo@bar.com"),
+                   "email=foo@bar.com&uid=10&role=user");
+
+        assert_eq!(set2::profile_for("foo@bar.com&role=admin"),
+                   "email=foo@bar.comroleadmin&uid=10&role=user");
+    }
+
+    #[test]
+    fn ecb_cut_and_paste() {
+        let oracle = &set2::RandomKey::new() as &set2::EcbCutPaste;
+        let result = set2::ecb_cut_and_paste(oracle);
+        let decrypted = oracle.decrypt_profile(&result);
+        let parsed = set2::parse_key_value(&decrypted).unwrap();
+
+        println!("decoded:\n{}", decrypted);
+        println!("parsed:\n{:?}", parsed);
+
+        assert_eq!(parsed["role"], "admin");
     }
 }
